@@ -9,7 +9,7 @@ client = MongoClient(uri, server_api=ServerApi('1'))
 db = client.mercado_livre
 
 
-# =============== USUÁRIO (nome, email, cpf, enderecos, favoritos) ===============
+# =================================================================================
 def create_usuario():
     #Insert
     mycol = db.usuario
@@ -85,22 +85,20 @@ def delete_usuario(nome):
     print("Deletando o usuário ", mydoc)
 
 def add_favorito(nome, titulo):
-    usuario = db.usuario.find_one({"nome": nome})
     produto = db.produto.find_one({"titulo": titulo})
-    if not usuario or not produto:
-        print("Usuário ou produto não encontrado.")
+    if not produto:
+        print("Produto não encontrado.")
         return
-    db.usuario.update_one({"_id": usuario["_id"]}, {"$addToSet": {"favoritos": produto["_id"]}})
-    print("Favorito adicionado.")
+    fav = {"titulo": produto["titulo"], "preco": produto["preco"],
+           "vendedor": produto["vendedor"]["nome"]}
+    r = db.usuario.update_one(
+        {"nome": nome, "favoritos.titulo": {"$ne": titulo}},
+        {"$push": {"favoritos": fav}})
+    print("Favorito adicionado." if r.modified_count else "Usuário não encontrado ou já é favorito.")
 
 def remove_favorito(nome, titulo):
-    usuario = db.usuario.find_one({"nome": nome})
-    produto = db.produto.find_one({"titulo": titulo})
-    if not usuario or not produto:
-        print("Usuário ou produto não encontrado.")
-        return
-    db.usuario.update_one({"_id": usuario["_id"]}, {"$pull": {"favoritos": produto["_id"]}})
-    print("Favorito removido.")
+    r = db.usuario.update_one({"nome": nome}, {"$pull": {"favoritos": {"titulo": titulo}}})
+    print("Favorito removido." if r.modified_count else "Nada removido.")
 
 def read_favoritos(nome):
     usuario = db.usuario.find_one({"nome": nome})
@@ -108,11 +106,10 @@ def read_favoritos(nome):
         print("Usuário não encontrado.")
         return
     print("Favoritos de", nome)
-    for p in db.produto.find({"_id": {"$in": usuario.get("favoritos", [])}}):
-        print(p["titulo"], p["preco"])
+    for p in usuario.get("favoritos", []):
+        print(p["titulo"], p["preco"], "- vendedor:", p["vendedor"])
 
-
-# =============== VENDEDOR (nome, usuario_id) ===============
+# =====================================================================
 def create_vendedor():
     #Insert
     mycol = db.vendedor
@@ -123,7 +120,7 @@ def create_vendedor():
         print("Usuário não encontrado.")
         return
     nome = input("Nome do vendedor: ")
-    mydoc = {"nome": nome, "usuario_id": usuario["_id"]}
+    mydoc = {"nome": nome, "usuario": {"nome": usuario["nome"], "email": usuario["email"]}}
     x = mycol.insert_one(mydoc)
     print("Documento inserido com ID ", x.inserted_id)
 
@@ -136,8 +133,7 @@ def read_vendedor(nome):
     else:
         mydoc = mycol.find({"nome": nome})
     for x in mydoc:
-        dono = db.usuario.find_one({"_id": x["usuario_id"]})
-        print(x["nome"], "- dono:", dono["nome"] if dono else "-")
+        print(x["nome"], "- dono:", x["usuario"]["nome"])
 
 def update_vendedor(nome):
     #Update
@@ -161,7 +157,7 @@ def delete_vendedor(nome):
     print("Deletando o vendedor ", mydoc)
 
 
-# =============== PRODUTO (titulo, preco, vendedor_id) ===============
+# ===================================================================================
 def create_produto():
     #Insert
     mycol = db.produto
@@ -177,7 +173,7 @@ def create_produto():
     except ValueError:
         print("Preço inválido.")
         return
-    mydoc = {"titulo": titulo, "preco": preco, "vendedor_id": vendedor["_id"]}
+    mydoc = {"titulo": titulo, "preco": preco, "vendedor": {"nome": vendedor["nome"]}}
     x = mycol.insert_one(mydoc)
     print("Documento inserido com ID ", x.inserted_id)
 
@@ -190,8 +186,7 @@ def read_produto(titulo):
     else:
         mydoc = mycol.find({"titulo": titulo})
     for x in mydoc:
-        vendedor = db.vendedor.find_one({"_id": x["vendedor_id"]})
-        print(x["titulo"], x["preco"], "- vendedor:", vendedor["nome"] if vendedor else "-")
+        print(x["titulo"], x["preco"], "- vendedor:", x["vendedor"]["nome"])
 
 def update_produto(titulo):
     #Update
@@ -224,7 +219,7 @@ def delete_produto(titulo):
     print("Deletando o produto ", mydoc)
 
 
-# =============== COMPRA (comprador_id, data_pedido, status, valor_total, itens) ===============
+# =========================================================================================
 def create_compra():
     #Insert
     mycol = db.compra
@@ -243,10 +238,10 @@ def create_compra():
             try:
                 qtd = int(input("Quantidade: "))
                 item = {
-                    "produto_id": produto["_id"],
                     "titulo": produto["titulo"],
                     "quantidade": qtd,
-                    "preco_unitario": produto["preco"]
+                    "preco_unitario": produto["preco"],
+                    "vendedor": produto["vendedor"]["nome"]
                 }
                 itens.append(item)
             except ValueError:
@@ -261,8 +256,10 @@ def create_compra():
     for i in itens:
         valor_total = valor_total + i["quantidade"] * i["preco_unitario"]
     mydoc = {
-        "comprador_id": comprador["_id"],
+        "comprador": {"nome": comprador["nome"], "email": comprador["email"], "cpf": comprador["cpf"]},
+        "endereco_entrega": comprador["enderecos"][0] if comprador.get("enderecos") else None,
         "data_pedido": date.today().isoformat(),
+        "status": "Pendente",
         "valor_total": round(valor_total, 2),
         "itens": itens
     }
@@ -278,9 +275,8 @@ def read_compra(status):
     else:
         mydoc = mycol.find({"status": status})
     for x in mydoc:
-        comprador = db.usuario.find_one({"_id": x["comprador_id"]})
         print("\nID:", x["_id"])
-        print(x["data_pedido"], x["status"], x["valor_total"], "- comprador:", comprador["nome"] if comprador else "-")
+        print(x["data_pedido"], x["status"], x["valor_total"], "- comprador:", x["comprador"]["nome"])
         for i in x["itens"]:
             print("   ", i["quantidade"], "x", i["titulo"], i["preco_unitario"])
 
